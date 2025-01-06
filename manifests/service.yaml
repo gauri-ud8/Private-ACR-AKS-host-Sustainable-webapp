@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: animated-sustain-svc
+  namespace: animated-sustain-ns
+spec:
+  type: ClusterIP
+  selector:
+    app: animated-sustain
+  ports:
+  - port: 80
+    targetPort: 80
+    

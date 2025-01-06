@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: animated-sustain
+  namespace: animated-sustain-ns
+spec:
+  selector:
+    matchLabels:
+      app: animated-sustain
+  # pod def
+  template:
+    metadata:
+      labels:
+        app: animated-sustain
+    spec:
+      containers:
+      - name: animated-sustain
+        image: animatedsustainabilityacr.azurecr.io/animated-sustain:51
+        resources:
+          requests: 
+            memory: 32Mi
+            cpu: "5m"
+          limits:
+            memory: "64Mi"
+            cpu: "10m"
+        ports:
+        - containerPort: 80
