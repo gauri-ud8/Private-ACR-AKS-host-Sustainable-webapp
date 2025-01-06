@@ -1,7 +1,7 @@
 # Private-ACR-AKS-host-Sustainable-webapp
 Empowering cloud-native deployment with private AKS and ACR to host a sustainability application!
 
-Thrilled to share an incredible project I recently collaborated on with Shubham Hadgal, where we designed and implemented a secure, scalable CI/CD pipeline for cloud-native applications! 
+Thrilled to share an incredible project I recently developed, where I designed and implemented a secure, scalable CI/CD pipeline for cloud-native applications! 
 # 🔧 Key Highlights:  
 1. Configured a self-hosted Azure DevOps agent within a secure virtual network.  
 2. Integrated private Azure Kubernetes Service (AKS) and Azure Container Registry (ACR) with seamless networking.  
