@@ -1,0 +1,142 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - manifests/**
+
+pool:
+  name: 'animated-sustainability-AP'
+
+variables:
+  imageName: 'animated-sustain'  # Replace with your Docker image name
+  tag: '$(Build.BuildId)'  # Use the build ID as the image tag
+  SONARQUBE_PROJECT_KEY: <''>
+  SONARQUBE_PROJECT_NAME: <''>
+  SONARQUBE_PROJECT_VERSION: '1.0'
+
+stages:
+- stage: SonarQubeAnalysis
+  jobs:
+  - job: SonarQube
+    displayName: 'SonarQube Code Analysis'
+    steps:
+    - task: SonarQubePrepare@7
+      inputs:
+        SonarQube: 'sonarqube'
+        scannerMode: 'CLI'
+        configMode: 'manual'
+        cliProjectKey: '$(SONARQUBE_PROJECT_KEY)'
+        cliProjectName: '$(SONARQUBE_PROJECT_NAME)'
+        cliProjectVersion: '$(SONARQUBE_PROJECT_VERSION)'
+        cliSources: '.'
+        extraProperties: |
+          sonar.projectKey=$(SONARQUBE_PROJECT_KEY)
+          sonar.projectName=$(SONARQUBE_PROJECT_NAME)
+          sonar.projectVersion=$(SONARQUBE_PROJECT_VERSION)
+          sonar.sources=.
+
+    - task: SonarQubeAnalyze@7
+
+    - task: SonarQubePublish@7
+      inputs:
+        pollingTimeoutSec: '300'
+    
+    - script: |
+        cd
+        cd sonarstatus/
+        sudo wget --header="Authorization: Basic $(echo -n $(SONARQUBE_TOKEN): | base64)" -qO- "$(SONARQUBE_URL)/api/qualitygates/project_status?projectKey=$(SONARQUBE_PROJECT_KEY)" -O response.json
+
+        qualityGateStatus=$(jq -r '.projectStatus.status' response.json)
+        echo "Parsed Quality Gate status: $qualityGateStatus"  # Debugging line to print the parsed status
+        echo "##vso[task.setvariable variable=Build.QualityGateStatus]$qualityGateStatus"
+
+        if [ "$qualityGateStatus" != "OK" ]; then
+          # Extract the conditions that failed
+          failedConditions=$(jq -r '.projectStatus.conditions[] | select(.status != "OK") | .metricKey + ": " + .actualValue + " " + .comparator + " " + .errorThreshold' response.json)
+          echo "Quality Gate failed due to the following conditions:"
+          echo "$failedConditions"
+          echo "##vso[task.logissue type=error]Quality Gate failed due to the following conditions: $failedConditions"
+          exit 1
+        fi
+
+      displayName: 'Get Quality Gate Status'
+
+      
+- stage: Build
+  dependsOn: SonarQubeAnalysis
+  condition: succeeded()
+  jobs:
+  - job: BuildDockerImage
+    displayName: 'Build Docker Image'
+    steps:
+    - script: |
+        docker image prune -a -f
+      displayName: 'Cleaning up the Local Docker Images.'
+
+    - task: Docker@2
+      inputs:
+        containerRegistry: 'animated-sustain-serviceconnect-devops'  # Replace with your ACR service connection name
+        repository: '$(imageName)'
+        command: 'build'
+        Dockerfile: '**/Dockerfile'
+        tags: |
+          $(tag)
+
+    - script: |
+        echo "Build ID: $(Build.BuildId)"
+        echo "Tag: $(tag)"
+
+- stage: TrivyScan
+  dependsOn: Build
+  condition: succeeded()  # This ensures the TrivyScan stage runs only if the previous stage succeeded
+  jobs:
+  - job: TrivyScanJob
+    displayName: 'Trivy Vulnerability Scan'
+    steps:
+    - script: |
+        sudo trivy image animatedsustainabilityacr.azurecr.io/$(imageName):$(tag) --severity CRITICAL,HIGH --format json --output trivy-report.json
+      displayName: 'Run Trivy Scan'
+
+    - script: |
+        vulnerabilities=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")]' trivy-report.json)
+        vulnerabilities_count=$(echo "$vulnerabilities" | jq 'length')
+        if [ "$vulnerabilities_count" -gt 0 ]; then
+          echo "CRITICAL or HIGH severity vulnerabilities found!"
+          echo "$vulnerabilities" | jq -r '.[] | "\(.Severity): \(.Title) - \(.Description)"'
+          exit 1
+        else
+          echo "No CRITICAL or HIGH severity vulnerabilities found."
+        fi
+      displayName: 'Check Trivy Scan Results'
+      continueOnError: false
+
+- stage: Push
+  dependsOn: TrivyScan
+  condition: succeeded()  # This ensures the Push stage runs only if the previous stage succeeded
+  jobs:
+  - job: PushDockerImage
+    displayName: 'Push Docker Image'
+    steps:
+    - task: Docker@2
+      inputs:
+        containerRegistry: 'animated-sustain-serviceconnect-devops'  # Replace with your ACR service connection name
+        repository: '$(imageName)'
+        command: 'push'
+        tags: |
+          $(tag)
+
+    - script: |
+        sed -i 's|image:.*|image: animatedsustainabilityacr.azurecr.io/$(imageName):$(Build.BuildId)|' manifests/deployment.yaml
+      displayName: 'Update image with Build ID: $(Build.BuildId) in deployment.yaml'
+
+    - script: |
+        git config --global user.email "$(Build.RequestedForEmail)"
+        git config --global user.name "$(Build.RequestedFor)"
+        git add .
+        git commit -m "Update image to animatedsustainabilityacr.azurecr.io/$(imageName):$(Build.BuildId)"
+        git push <reponame> HEAD:$(Build.SourceBranchName)
+      displayName: 'Commit and push changes'
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
